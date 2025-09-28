@@ -11,12 +11,12 @@
 #include "SMSModule.h"
 #include "WiFiConfig.h"
 
-#define SERVO_PIN D5
-#define SCALE_DOUT_PIN D6
-#define SCALE_SCK_PIN D7
-#define PUMP_PIN D8
-#define GSM_RX_PIN D1
-#define GSM_TX_PIN D2
+#define SERVO_PIN D4
+#define SCALE_DOUT_PIN D2
+#define SCALE_SCK_PIN D3
+#define PUMP_PIN D5
+#define GSM_RX_PIN D6
+#define GSM_TX_PIN D7
 
 #define EEPROM_SIZE 512
 #define WIFI_EEPROM_START 0
@@ -25,6 +25,10 @@
 #define FEED_EEPROM_SIZE 60  // 10 items * 6 bytes each
 #define WASH_EEPROM_START 160
 #define WASH_EEPROM_SIZE 60  // 10 items * 6 bytes each
+#define WEIGHT_DROP_EEPROM_START 220
+#define WEIGHT_DROP_EEPROM_SIZE 4  // float size
+#define WASH_DURATION_EEPROM_START 224
+#define WASH_DURATION_EEPROM_SIZE 4  // unsigned long size
 
 WiFiConfig wifiConfig("PetFeederAP", "12345678", WIFI_EEPROM_START, WIFI_EEPROM_SIZE);
 ESP8266WebServer server(80);
@@ -48,6 +52,18 @@ String washSchedules[10];
 uint8_t feedCount = 0;
 uint8_t washCount = 0;
 
+// Weight drop tracking variables
+float targetWeightDrop = 0.0;  // grams
+float initialWeight = 0.0;
+bool isMonitoringWeightDrop = false;
+unsigned long weightMonitoringStartTime = 0;
+const unsigned long WEIGHT_MONITOR_TIMEOUT = 300000; // 5 minutes timeout
+
+// Wash timer variables
+unsigned long washDuration = 5000;  // Default 5 seconds
+unsigned long washStartTime = 0;
+bool isWashActive = false;
+
 String getCurrentTimeString() {
   if (wifiConfig.isConnected() && !wifiConfig.isAPModeActive()) {
     if (millis() - lastNTPUpdate > 3600000) {
@@ -60,6 +76,114 @@ String getCurrentTimeString() {
     return String(buf);
   }
   return "00:00";
+}
+
+// EEPROM functions for weight drop setting
+void saveWeightDropSetting() {
+  EEPROM.put(WEIGHT_DROP_EEPROM_START, targetWeightDrop);
+  EEPROM.commit();
+  Serial.println("Weight drop saved to EEPROM: " + String(targetWeightDrop) + "g");
+}
+
+void loadWeightDropSetting() {
+  EEPROM.get(WEIGHT_DROP_EEPROM_START, targetWeightDrop);
+  // If EEPROM is uninitialized, set default to 0
+  if (isnan(targetWeightDrop) || targetWeightDrop < 0 || targetWeightDrop > 10000) {
+    targetWeightDrop = 0.0;
+    saveWeightDropSetting(); // Save default
+  }
+  Serial.println("Weight drop loaded from EEPROM: " + String(targetWeightDrop) + "g");
+}
+
+// EEPROM functions for wash duration
+void saveWashDuration() {
+  EEPROM.put(WASH_DURATION_EEPROM_START, washDuration);
+  EEPROM.commit();
+  Serial.println("Wash duration saved to EEPROM: " + String(washDuration) + "ms");
+}
+
+void loadWashDuration() {
+  EEPROM.get(WASH_DURATION_EEPROM_START, washDuration);
+  // If EEPROM is uninitialized, set default to 5 seconds
+  if (washDuration == 0 || washDuration > 3600000) { // Sanity check: max 1 hour
+    washDuration = 5000;
+    saveWashDuration(); // Save default
+  }
+  Serial.println("Wash duration loaded from EEPROM: " + String(washDuration) + "ms");
+}
+
+// Weight drop monitoring functions
+void startWeightDropMonitoring() {
+  initialWeight = scale.read();
+  isMonitoringWeightDrop = true;
+  weightMonitoringStartTime = millis();
+  Serial.println("Weight drop monitoring started");
+  Serial.print("Initial weight: ");
+  Serial.println(initialWeight);
+  Serial.print("Target drop: ");
+  Serial.println(targetWeightDrop);
+}
+
+void stopWeightDropMonitoring() {
+  isMonitoringWeightDrop = false;
+  Serial.println("Weight drop monitoring stopped");
+}
+
+void checkWeightDrop() {
+  if (!isMonitoringWeightDrop || targetWeightDrop <= 0) return;
+
+  float currentWeight = scale.read();
+  float weightDiff = initialWeight - currentWeight;
+
+  Serial.print("Weight monitoring - Current: ");
+  Serial.print(currentWeight);
+  Serial.print("g, Drop: ");
+  Serial.print(weightDiff);
+  Serial.print("g, Target: ");
+  Serial.println(targetWeightDrop);
+
+  // Check if target drop is reached
+  if (weightDiff >= targetWeightDrop) {
+    String message = "Pet feeder: Food consumed! Weight drop detected: " +
+                     String(weightDiff, 1) + "g (Target: " + String(targetWeightDrop, 1) + "g)";
+    smsModule.sendSMS(message);
+    stopWeightDropMonitoring();
+    Serial.println("Target weight drop reached! SMS sent.");
+  }
+
+  // Check timeout (5 minutes)
+  if (millis() - weightMonitoringStartTime > WEIGHT_MONITOR_TIMEOUT) {
+    Serial.println("Weight monitoring timeout reached");
+    stopWeightDropMonitoring();
+  }
+}
+
+// Wash timer functions
+void startWashTimer() {
+  relayPump.setHigh();
+  isWashActive = true;
+  washStartTime = millis();
+  Serial.println("Wash timer started");
+  Serial.print("Duration: ");
+  Serial.print(washDuration);
+  Serial.println(" ms");
+}
+
+void checkWashTimer() {
+  if (!isWashActive) return;
+
+  if (millis() - washStartTime >= washDuration) {
+    relayPump.setLow();
+    isWashActive = false;
+    Serial.println("Wash timer completed - pump turned off");
+
+    // Send SMS notification for scheduled washes
+    String nowStr = getCurrentTimeString();
+    if (nowStr != "00:00") {
+      smsModule.sendSMS("Pet feeder: Wash operation completed at " + nowStr +
+                        " (Duration: " + String(washDuration / 1000) + "s)");
+    }
+  }
 }
 
 bool serveFile(const char* filepath, const char* contentType) {
@@ -94,16 +218,74 @@ void handleJS() {
 
 void handleFeed() {
   servo.open();
-  delay(3000);
+
+  // Start weight drop monitoring if target is set
+  if (targetWeightDrop > 0) {
+    startWeightDropMonitoring();
+  }
+
+  delay(300); // Shorter delay
   servo.close();
-  server.send(200, "text/plain", "Feed operation completed");
+
+  // Fixed string concatenation
+  String response = "Feed operation completed";
+  if (targetWeightDrop > 0) {
+    response += " (Weight drop monitoring active)";
+  }
+  server.send(200, "text/plain", response);
 }
 
 void handleWash() {
-  relayPump.setHigh();
-  delay(5000);
-  relayPump.setLow();
-  server.send(200, "text/plain", "Wash operation completed");
+  if (isWashActive) {
+    server.send(200, "text/plain", "Wash operation is already in progress");
+    return;
+  }
+
+  startWashTimer();
+  String response = "Wash operation started for " + String(washDuration / 1000) + " seconds";
+  server.send(200, "text/plain", response);
+}
+
+void handleSetWashDuration() {
+  if (server.hasArg("duration")) {
+    String durationStr = server.arg("duration");
+    unsigned long newDuration = durationStr.toInt() * 1000; // Convert seconds to milliseconds
+
+    if (newDuration > 0 && newDuration <= 3600000) { // Max 1 hour
+      washDuration = newDuration;
+      saveWashDuration(); // Save to EEPROM
+      server.send(200, "text/plain", "Wash duration set to: " + String(washDuration / 1000) + " seconds");
+    } else {
+      server.send(400, "text/plain", "Invalid duration (1-3600 seconds)");
+    }
+  } else {
+    server.send(400, "text/plain", "Missing duration parameter");
+  }
+}
+
+void handleGetWashDuration() {
+  String json = "{\"washDuration\":" + String(washDuration / 1000) + ",";
+  json += "\"isWashActive\":" + String(isWashActive ? "true" : "false") + ",";
+  if (isWashActive) {
+    unsigned long elapsed = millis() - washStartTime;
+    unsigned long remaining = (washDuration > elapsed) ? (washDuration - elapsed) : 0;
+    json += "\"elapsedTime\":" + String(elapsed / 1000) + ",";
+    json += "\"remainingTime\":" + String(remaining / 1000);
+  } else {
+    json += "\"elapsedTime\":0,\"remainingTime\":0";
+  }
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+void handleStopWash() {
+  if (isWashActive) {
+    relayPump.setLow();
+    isWashActive = false;
+    server.send(200, "text/plain", "Wash operation stopped manually");
+  } else {
+    server.send(200, "text/plain", "No wash operation in progress");
+  }
 }
 
 void handleTare() {
@@ -115,7 +297,7 @@ void handleTare() {
 void saveFeedSchedules() {
   int addr = FEED_EEPROM_START;
   EEPROM.write(addr++, feedCount);  // Store count first
-  
+
   for (uint8_t i = 0; i < feedCount; i++) {
     const char* timeStr = feedSchedules[i].c_str();
     for (uint8_t j = 0; j < 5; j++) {
@@ -129,7 +311,7 @@ void saveFeedSchedules() {
 void saveWashSchedules() {
   int addr = WASH_EEPROM_START;
   EEPROM.write(addr++, washCount);  // Store count first
-  
+
   for (uint8_t i = 0; i < washCount; i++) {
     const char* timeStr = washSchedules[i].c_str();
     for (uint8_t j = 0; j < 5; j++) {
@@ -144,7 +326,8 @@ void saveWashSchedules() {
 void loadFeedSchedules() {
   int addr = FEED_EEPROM_START;
   feedCount = EEPROM.read(addr++);
-  
+  if (feedCount > 10) feedCount = 0; // Sanity check
+
   for (uint8_t i = 0; i < feedCount && i < 10; i++) {
     char timeBuf[6] = {0};
     for (uint8_t j = 0; j < 5; j++) {
@@ -158,7 +341,8 @@ void loadFeedSchedules() {
 void loadWashSchedules() {
   int addr = WASH_EEPROM_START;
   washCount = EEPROM.read(addr++);
-  
+  if (washCount > 10) washCount = 0; // Sanity check
+
   for (uint8_t i = 0; i < washCount && i < 10; i++) {
     char timeBuf[6] = {0};
     for (uint8_t j = 0; j < 5; j++) {
@@ -171,12 +355,12 @@ void loadWashSchedules() {
 
 bool addFeedTime(const String& timeStr) {
   if (feedCount >= 10) return false;
-  
+
   // Check if time already exists
   for (uint8_t i = 0; i < feedCount; i++) {
     if (feedSchedules[i] == timeStr) return false;
   }
-  
+
   feedSchedules[feedCount++] = timeStr;
   saveFeedSchedules();
   return true;
@@ -199,12 +383,12 @@ bool removeFeedTime(const String& timeStr) {
 
 bool addWashTime(const String& timeStr) {
   if (washCount >= 10) return false;
-  
+
   // Check if time already exists
   for (uint8_t i = 0; i < washCount; i++) {
     if (washSchedules[i] == timeStr) return false;
   }
-  
+
   washSchedules[washCount++] = timeStr;
   saveWashSchedules();
   return true;
@@ -305,6 +489,35 @@ void handleGetWashTimes() {
   server.send(200, "application/json", json);
 }
 
+void handleSetWeightDrop() {
+  if (server.hasArg("weight")) {
+    String weightStr = server.arg("weight");
+    float newWeight = weightStr.toFloat();
+
+    if (newWeight >= 0) {
+      targetWeightDrop = newWeight;
+      saveWeightDropSetting(); // Save to EEPROM
+      server.send(200, "text/plain", "Weight drop target set to: " + String(targetWeightDrop, 1) + "g");
+    } else {
+      server.send(400, "text/plain", "Invalid weight value");
+    }
+  } else {
+    server.send(400, "text/plain", "Missing weight parameter");
+  }
+}
+
+void handleGetWeightDrop() {
+  String json = "{\"targetWeightDrop\":" + String(targetWeightDrop, 1) + ",";
+  json += "\"isMonitoring\":" + String(isMonitoringWeightDrop ? "true" : "false") + ",";
+  json += "\"currentWeight\":" + String(scale.read(), 1) + "}";
+  server.send(200, "application/json", json);
+}
+
+void handleStopMonitoring() {
+  stopWeightDropMonitoring();
+  server.send(200, "text/plain", "Weight drop monitoring stopped");
+}
+
 void handleSetPhone() {
   if (server.hasArg("number")) {
     String number = server.arg("number");
@@ -326,10 +539,30 @@ void handleStatus() {
   status += "WiFi: " + String(wifiConfig.isConnected() ? "Connected" : "Disconnected") + "\n";
   status += "IP: " + wifiConfig.getIP().toString() + "\n";
   status += "AP Mode: " + String(wifiConfig.isAPModeActive() ? "Active" : "Inactive") + "\n";
-  status += "Scale reading: " + String(scale.read()) + "\n";
+  status += "Scale reading: " + String(scale.read(), 1) + "g\n";
   status += "Current Time: " + getCurrentTimeString() + "\n";
-  
-  // FEED SCHEDULES - SHOW THEM FUCKING CLEARLY
+
+  // Weight drop monitoring status
+  status += "\nWEIGHT DROP MONITORING:\n";
+  status += "Target drop: " + String(targetWeightDrop, 1) + "g\n";
+  status += "Status: " + String(isMonitoringWeightDrop ? "ACTIVE" : "Inactive") + "\n";
+  if (isMonitoringWeightDrop) {
+    status += "Initial weight: " + String(initialWeight, 1) + "g\n";
+    status += "Current drop: " + String(initialWeight - scale.read(), 1) + "g\n";
+  }
+
+  // Wash timer status
+  status += "\nWASH TIMER:\n";
+  status += "Duration: " + String(washDuration / 1000) + " seconds\n";
+  status += "Status: " + String(isWashActive ? "ACTIVE" : "Inactive") + "\n";
+  if (isWashActive) {
+    unsigned long elapsed = millis() - washStartTime;
+    unsigned long remaining = (washDuration > elapsed) ? (washDuration - elapsed) : 0;
+    status += "Elapsed: " + String(elapsed / 1000) + "s\n";
+    status += "Remaining: " + String(remaining / 1000) + "s\n";
+  }
+
+  // FEED SCHEDULES
   status += "\nFEED SCHEDULES (" + String(feedCount) + "):\n";
   if (feedCount > 0) {
     for (uint8_t i = 0; i < feedCount; i++) {
@@ -338,8 +571,8 @@ void handleStatus() {
   } else {
     status += "  No feed times scheduled\n";
   }
-  
-  // WASH SCHEDULES - SHOW THEM FUCKING CLEARLY  
+
+  // WASH SCHEDULES
   status += "\nWASH SCHEDULES (" + String(washCount) + "):\n";
   if (washCount > 0) {
     for (uint8_t i = 0; i < washCount; i++) {
@@ -348,9 +581,9 @@ void handleStatus() {
   } else {
     status += "  No wash times scheduled\n";
   }
-  
+
   status += "\nPhone: " + String(smsModule.getStoredPhoneNumber()) + "\n";
-  
+
   server.send(200, "text/plain", status);
 }
 
@@ -358,26 +591,32 @@ void setupServer() {
   server.on("/", handleRoot);
   server.on("/style.css", handleCSS);
   server.on("/script.js", handleJS);
-  
+
   server.on("/feed", HTTP_POST, handleFeed);
   server.on("/wash", HTTP_POST, handleWash);
+  server.on("/stopWash", HTTP_POST, handleStopWash);
+  server.on("/setWashDuration", HTTP_POST, handleSetWashDuration);
+  server.on("/getWashDuration", HTTP_GET, handleGetWashDuration);
   server.on("/tare", HTTP_POST, handleTare);
   server.on("/addFeed", HTTP_POST, handleAddFeed);
   server.on("/removeFeed", HTTP_POST, handleRemoveFeed);
   server.on("/addWash", HTTP_POST, handleAddWash);
   server.on("/removeWash", HTTP_POST, handleRemoveWash);
+  server.on("/setWeightDrop", HTTP_POST, handleSetWeightDrop);
+  server.on("/getWeightDrop", HTTP_GET, handleGetWeightDrop);
+  server.on("/stopMonitoring", HTTP_POST, handleStopMonitoring);
   server.on("/getFeedTimes", HTTP_GET, handleGetFeedTimes);
   server.on("/getWashTimes", HTTP_GET, handleGetWashTimes);
   server.on("/setPhone", HTTP_POST, handleSetPhone);
   server.on("/sendSMS", HTTP_POST, handleSendSMS);
   server.on("/status", HTTP_GET, handleStatus);
-  
+
   server.begin();
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(500); // Shorter initial delay
 
   EEPROM.begin(EEPROM_SIZE);
   SPIFFS.begin();
@@ -388,21 +627,29 @@ void setup() {
   smsModule.begin();
 
   wifiConfig.begin();
-  
-  // Load schedules from EEPROM
+
+  // Load settings from EEPROM
   loadFeedSchedules();
   loadWashSchedules();
+  loadWeightDropSetting();
+  loadWashDuration();
 
   setupServer();
 
   if (wifiConfig.isConnected()) {
     timeClient.begin();
-    delay(2000);
+    delay(500); // Shorter delay
     timeClient.forceUpdate();
     lastNTPUpdate = millis();
   }
-  
+
   Serial.println("Pet Feeder Started!");
+  Serial.print("Weight drop target: ");
+  Serial.print(targetWeightDrop);
+  Serial.println("g");
+  Serial.print("Wash duration: ");
+  Serial.print(washDuration / 1000);
+  Serial.println(" seconds");
   Serial.println("Feed Schedules:");
   for (uint8_t i = 0; i < feedCount; i++) {
     Serial.println("  " + feedSchedules[i]);
@@ -421,30 +668,42 @@ void handleScheduledEvents() {
   if (millis() - lastTimeUpdate > 60000) {
     String nowStr = getCurrentTimeString();
     lastTimeUpdate = millis();
-    
-    if (nowStr == "00:00") return;
+
+    if (nowStr == "00:00") {
+      // Reset daily flags at midnight
+      for (uint8_t i = 0; i < 10; i++) {
+        feedExecutedToday[i] = false;
+        washExecutedToday[i] = false;
+      }
+      return;
+    }
 
     for (uint8_t i = 0; i < feedCount && i < 10; i++) {
       if (!feedExecutedToday[i] && feedSchedules[i] == nowStr) {
         servo.open();
-        delay(3000);
+
+        // Start weight drop monitoring for scheduled feeds too
+        if (targetWeightDrop > 0) {
+          startWeightDropMonitoring();
+        }
+
+        delay(300); // Shorter delay
         servo.close();
         feedExecutedToday[i] = true;
-        smsModule.sendSMS("Pet feeder: Feed operation completed at " + nowStr);
-      } else if (feedSchedules[i] != nowStr) {
-        feedExecutedToday[i] = false;
+
+        // Fixed string concatenation
+        String smsMessage = "Pet feeder: Feed operation completed at " + nowStr;
+        if (targetWeightDrop > 0) {
+          smsMessage += " (Weight drop monitoring active)";
+        }
+        smsModule.sendSMS(smsMessage);
       }
     }
 
     for (uint8_t i = 0; i < washCount && i < 10; i++) {
-      if (!washExecutedToday[i] && washSchedules[i] == nowStr) {
-        relayPump.setHigh();
-        delay(5000);
-        relayPump.setLow();
+      if (!washExecutedToday[i] && washSchedules[i] == nowStr && !isWashActive) {
+        startWashTimer();
         washExecutedToday[i] = true;
-        smsModule.sendSMS("Pet feeder: Wash operation completed at " + nowStr);
-      } else if (washSchedules[i] != nowStr) {
-        washExecutedToday[i] = false;
       }
     }
   }
@@ -453,10 +712,20 @@ void handleScheduledEvents() {
 void loop() {
   server.handleClient();
   wifiConfig.handleClient();
-  
+
   if (wifiConfig.isConnected() && !wifiConfig.isAPModeActive()) {
     handleScheduledEvents();
+
+    // Check weight drop periodically
+    if (isMonitoringWeightDrop) {
+      checkWeightDrop();
+    }
+
+    // Check wash timer
+    if (isWashActive) {
+      checkWashTimer();
+    }
   }
-  
-  delay(1000);
+
+  delay(300); // Shorter loop delay
 }

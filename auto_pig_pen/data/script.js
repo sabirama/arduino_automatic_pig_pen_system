@@ -3,7 +3,8 @@ function feedNow() {
         .then(r => r.text())
         .then(text => {
             alert(text);
-            getStatus(); // Update status after operation
+            getStatus();
+            updateWeightDropStatus();
         })
         .catch(err => alert('Error: ' + err));
 }
@@ -14,8 +15,68 @@ function washNow() {
         .then(text => {
             alert(text);
             getStatus();
+            updateWashTimerStatus();
         })
         .catch(err => alert('Error: ' + err));
+}
+
+function stopWash() {
+    if (confirm('Stop wash operation?')) {
+        fetch('/stopWash', { method: 'POST' })
+            .then(r => r.text())
+            .then(text => {
+                alert(text);
+                getStatus();
+                updateWashTimerStatus();
+            })
+            .catch(err => alert('Error: ' + err));
+    }
+}
+
+function setWashDuration() {
+    let duration = document.getElementById('washDuration').value;
+    if (duration && duration > 0 && duration <= 3600) {
+        const formData = new FormData();
+        formData.append('duration', duration);
+        
+        fetch('/setWashDuration', { 
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.text())
+        .then(text => {
+            alert(text);
+            updateWashTimerStatus();
+            getStatus();
+        })
+        .catch(err => alert('Error: ' + err));
+    } else {
+        alert('Please enter a valid duration (1-3600 seconds)');
+    }
+}
+
+function updateWashTimerStatus() {
+    fetch('/getWashDuration')
+        .then(r => r.json())
+        .then(data => {
+            const statusDiv = document.getElementById('washTimerStatus');
+            let html = '<h3>Wash Timer</h3>';
+            html += `<p><strong>Duration:</strong> ${data.washDuration} seconds</p>`;
+            html += `<p><strong>Status:</strong> <span style="color: ${data.isWashActive ? '#e74c3c' : '#27ae60'}">`;
+            html += data.isWashActive ? 'ACTIVE - Wash in progress' : 'Inactive';
+            html += '</span></p>';
+            
+            if (data.isWashActive) {
+                html += `<p><strong>Elapsed:</strong> ${data.elapsedTime}s</p>`;
+                html += `<p><strong>Remaining:</strong> ${data.remainingTime}s</p>`;
+                html += '<button onclick="stopWash()" class="stop-btn">Stop Wash</button>';
+            }
+            
+            statusDiv.innerHTML = html;
+        })
+        .catch(err => {
+            console.error('Error updating wash timer status:', err);
+        });
 }
 
 function tareScale() { 
@@ -24,14 +85,72 @@ function tareScale() {
         .then(text => {
             alert(text);
             getStatus();
+            updateWeightDropStatus();
         })
         .catch(err => alert('Error: ' + err));
+}
+
+function setWeightDrop() {
+    let weight = document.getElementById('weightDrop').value;
+    if (weight && weight >= 0) {
+        const formData = new FormData();
+        formData.append('weight', weight);
+        
+        fetch('/setWeightDrop', { 
+            method: 'POST',
+            body: formData
+        })
+        .then(r => r.text())
+        .then(text => {
+            alert(text);
+            updateWeightDropStatus();
+            getStatus();
+        })
+        .catch(err => alert('Error: ' + err));
+    } else {
+        alert('Please enter a valid weight (grams)');
+    }
+}
+
+function stopWeightMonitoring() {
+    if (confirm('Stop weight drop monitoring?')) {
+        fetch('/stopMonitoring', { method: 'POST' })
+            .then(r => r.text())
+            .then(text => {
+                alert(text);
+                updateWeightDropStatus();
+                getStatus();
+            })
+            .catch(err => alert('Error: ' + err));
+    }
+}
+
+function updateWeightDropStatus() {
+    fetch('/getWeightDrop')
+        .then(r => r.json())
+        .then(data => {
+            const statusDiv = document.getElementById('weightDropStatus');
+            let html = '<h3>Weight Drop Monitoring</h3>';
+            html += `<p><strong>Target Drop:</strong> ${data.targetWeightDrop}g</p>`;
+            html += `<p><strong>Current Weight:</strong> ${data.currentWeight}g</p>`;
+            html += `<p><strong>Status:</strong> <span style="color: ${data.isMonitoring ? '#e74c3c' : '#27ae60'}">`;
+            html += data.isMonitoring ? 'ACTIVE - Monitoring weight drop' : 'Inactive';
+            html += '</span></p>';
+            
+            if (data.isMonitoring) {
+                html += '<button onclick="stopWeightMonitoring()" class="stop-btn">Stop Monitoring</button>';
+            }
+            
+            statusDiv.innerHTML = html;
+        })
+        .catch(err => {
+            console.error('Error updating weight drop status:', err);
+        });
 }
 
 function addFeedTime() {
     let time = document.getElementById('feedTime').value;
     if (time) {
-        // Send as form data instead of query parameter
         const formData = new FormData();
         formData.append('time', time);
         
@@ -42,8 +161,8 @@ function addFeedTime() {
         .then(r => r.text())
         .then(text => {
             alert(text);
-            loadFeedTimes(); // Reload schedules
-            getStatus(); // Update status
+            loadFeedTimes();
+            getStatus();
         })
         .catch(err => alert('Error: ' + err));
     } else {
@@ -54,7 +173,6 @@ function addFeedTime() {
 function removeFeedTime() {
     let time = document.getElementById('feedTime').value;
     if (time) {
-        // Send as form data instead of query parameter
         const formData = new FormData();
         formData.append('time', time);
         
@@ -77,7 +195,6 @@ function removeFeedTime() {
 function addWashTime() {
     let time = document.getElementById('washTime').value;
     if (time) {
-        // Send as form data instead of query parameter
         const formData = new FormData();
         formData.append('time', time);
         
@@ -100,7 +217,6 @@ function addWashTime() {
 function removeWashTime() {
     let time = document.getElementById('washTime').value;
     if (time) {
-        // Send as form data instead of query parameter
         const formData = new FormData();
         formData.append('time', time);
         
@@ -123,7 +239,6 @@ function removeWashTime() {
 function setPhoneNumber() {
     let number = document.getElementById('phoneNumber').value;
     if (number) {
-        // Send as form data instead of query parameter
         const formData = new FormData();
         formData.append('number', number);
         
@@ -143,7 +258,6 @@ function setPhoneNumber() {
 }
 
 function sendTestSMS() {
-    // Send as form data with optional message parameter
     const formData = new FormData();
     formData.append('message', 'Test message from pet feeder');
     
@@ -214,7 +328,6 @@ function loadWashTimes() {
 
 function removeSpecificFeedTime(time) {
     if (confirm('Remove feed time ' + time + '?')) {
-        // Send as form data instead of query parameter
         const formData = new FormData();
         formData.append('time', time);
         
@@ -234,7 +347,6 @@ function removeSpecificFeedTime(time) {
 
 function removeSpecificWashTime(time) {
     if (confirm('Remove wash time ' + time + '?')) {
-        // Send as form data instead of query parameter
         const formData = new FormData();
         formData.append('time', time);
         
@@ -261,13 +373,14 @@ document.addEventListener('DOMContentLoaded', function() {
         loadFeedTimes();
         loadWashTimes();
         getStatus();
+        updateWeightDropStatus();
+        updateWashTimerStatus();
     }, 1000);
     
     // Load phone number from status
     fetch('/status')
         .then(r => r.text())
         .then(status => {
-            // Updated to match the new status format
             const phoneLine = status.split('\n').find(line => line.includes('Phone:'));
             if (phoneLine) {
                 const phoneNumber = phoneLine.split(':')[1]?.trim();
@@ -282,6 +395,8 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(getStatus, 30000);
     setInterval(loadFeedTimes, 15000);
     setInterval(loadWashTimes, 15000);
+    setInterval(updateWeightDropStatus, 10000);
+    setInterval(updateWashTimerStatus, 2000);
     
     console.log('Pet feeder control initialized');
 });

@@ -1,50 +1,68 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>Pet Feeder Control</title>
-    <link rel="stylesheet" href="style.css">
-  </head>
-  <body>
-    <div class="container">
-      <h1>Pet Feeder Control System</h1>
-      
-      <div class="section">
-        <h2>Manual Controls</h2>
-        <button onclick="feedNow()">Feed Now</button>
-        <button onclick="washNow()">Wash Now</button>
-        <button onclick="tareScale()">Tare Scale</button>
-      </div>
-      
-      <div class="section">
-        <h2>Feed Schedule</h2>
-        <input type="time" id="feedTime">
-        <button onclick="addFeedTime()">Add Feed Time</button>
-        <button onclick="removeFeedTime()">Remove Feed Time</button>
-        <div id="feedSchedules"></div>
-      </div>
-      
-      <div class="section">
-        <h2>Wash Schedule</h2>
-        <input type="time" id="washTime">
-        <button onclick="addWashTime()">Add Wash Time</button>
-        <button onclick="removeWashTime()">Remove Wash Time</button>
-        <div id="washSchedules"></div>
-      </div>
-      
-      <div class="section">
-        <h2>SMS Settings</h2>
-        <input type="text" id="phoneNumber" placeholder="Phone Number">
-        <button onclick="setPhoneNumber()">Set Phone Number</button>
-        <button onclick="sendTestSMS()">Send Test SMS</button>
-      </div>
-      
-      <div class="section">
-        <h2>System Status</h2>
-        <button onclick="getStatus()">Get Status</button>
-        <div id="status"></div>
-      </div>
+
+<head>
+  <title>Automatic Feeder and Washer System</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="container">
+    <h1>Automatic Feeder and Washer System</h1>
+
+    <div class="section">
+      <h2>System Status</h2>
+      <button onclick="getStatus()">Get Status</button>
+      <div id="status"></div>
     </div>
-    
-    <script src="script.js"></script>
-  </body>
+
+    <div class="section">
+      <h2>Manual Controls</h2>
+      <button onclick="feedNow()">Feed Now</button>
+      <button onclick="washNow()">Wash Now</button>
+      <button onclick="tareScale()">Tare Scale</button>
+    </div>
+
+    <div class="section">
+      <h2>Weight Drop Monitoring</h2>
+      <div class="control-group">
+        <input type="number" id="weightDrop" step="0.1" min="0" placeholder="Target weight drop (grams)">
+        <button onclick="setWeightDrop()">Set Target</button>
+      </div>
+      <div id="weightDropStatus"></div>
+    </div>
+
+    <div class="section">
+      <h2>Wash Timer</h2>
+      <div class="control-group">
+        <input type="number" id="washDuration" min="1" max="3600" placeholder="Duration in seconds (1-3600)">
+        <button onclick="setWashDuration()">Set Duration</button>
+      </div>
+      <div id="washTimerStatus"></div>
+    </div>
+
+    <div class="section">
+      <h2>Feed Schedule</h2>
+      <input type="time" id="feedTime">
+      <button onclick="addFeedTime()">Add Feed Time</button>
+      <div id="feedSchedules"></div>
+    </div>
+
+    <div class="section">
+      <h2>Wash Schedule</h2>
+      <input type="time" id="washTime">
+      <button onclick="addWashTime()">Add Wash Time</button>
+      <div id="washSchedules"></div>
+    </div>
+
+    <div class="section">
+      <h2>SMS Settings</h2>
+      <input type="text" id="phoneNumber" placeholder="Phone Number">
+      <button onclick="setPhoneNumber()">Set Phone Number</button>
+      <button onclick="sendTestSMS()">Send Test SMS</button>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
 </html>
