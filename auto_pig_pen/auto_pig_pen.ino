@@ -173,7 +173,7 @@ void checkWashTimer() {
   if (!isWashActive) return;
 
   if (millis() - washStartTime >= washDuration) {
-    relayPump.setLow();
+    relayPump.setHigh();  
     isWashActive = false;
     Serial.println("Wash timer completed - pump turned off");
 
@@ -666,6 +666,13 @@ void handleScheduledEvents() {
     return;
   }
 
+  // Only check time every 30 seconds to prevent watchdog reset
+  static unsigned long lastTimeCheck = 0;
+  if (millis() - lastTimeCheck < 30000) {
+    return;
+  }
+  lastTimeCheck = millis();
+
   String nowStr = getCurrentTimeString();
 
   if (nowStr == "00:00") {
@@ -674,13 +681,15 @@ void handleScheduledEvents() {
       feedExecutedToday[i] = false;
       washExecutedToday[i] = false;
     }
-    lastTimeUpdate = millis();
+    Serial.println("Daily schedule flags reset");
     return;
   }
 
-  // Check feed schedules EVERY TIME (removed the 60-second delay)
+  // Check feed schedules
   for (uint8_t i = 0; i < feedCount && i < 10; i++) {
     if (!feedExecutedToday[i] && feedSchedules[i] == nowStr) {
+      Serial.println("Triggering scheduled feed: " + nowStr);
+
       servo.open();
 
       // Start weight drop monitoring for scheduled feeds too
@@ -700,15 +709,14 @@ void handleScheduledEvents() {
     }
   }
 
-  // Check wash schedules EVERY TIME (removed the 60-second delay)
+  // Check wash schedules
   for (uint8_t i = 0; i < washCount && i < 10; i++) {
     if (!washExecutedToday[i] && washSchedules[i] == nowStr && !isWashActive) {
+      Serial.println("Triggering scheduled wash: " + nowStr);
       startWashTimer();
       washExecutedToday[i] = true;
     }
   }
-
-  lastTimeUpdate = millis();
 }
 
 void loop() {
