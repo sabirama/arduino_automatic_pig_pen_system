@@ -57,7 +57,7 @@ float targetWeightDrop = 0.0;  // grams
 float initialWeight = 0.0;
 bool isMonitoringWeightDrop = false;
 unsigned long weightMonitoringStartTime = 0;
-const unsigned long WEIGHT_MONITOR_TIMEOUT = 300000; // 5 minutes timeout
+const unsigned long WEIGHT_MONITOR_TIMEOUT = 60000; // 1 minutes timeout
 
 // Wash timer variables
 unsigned long washDuration = 5000;  // Default 5 seconds
@@ -114,14 +114,17 @@ void loadWashDuration() {
 
 // Weight drop monitoring functions
 void startWeightDropMonitoring() {
-  initialWeight = scale.read();
+  initialWeight = scale.read(); // Get current weight reading
+  if (initialWeight <= 0) {
+    initialWeight = 0.0; // Set to 0 if no valid reading
+  }
   isMonitoringWeightDrop = true;
   weightMonitoringStartTime = millis();
   Serial.println("Weight drop monitoring started");
   Serial.print("Initial weight: ");
-  Serial.println(initialWeight);
+  Serial.println(initialWeight, 1);
   Serial.print("Target drop: ");
-  Serial.println(targetWeightDrop);
+  Serial.println(targetWeightDrop, 1);
 }
 
 void stopWeightDropMonitoring() {
@@ -133,27 +136,34 @@ void checkWeightDrop() {
   if (!isMonitoringWeightDrop || targetWeightDrop <= 0) return;
 
   float currentWeight = scale.read();
+  if (currentWeight <= 0) {
+    Serial.println("Invalid weight reading, skipping check");
+    return;
+  }
+
   float weightDiff = initialWeight - currentWeight;
 
   Serial.print("Weight monitoring - Current: ");
-  Serial.print(currentWeight);
+  Serial.print(currentWeight, 1);
   Serial.print("g, Drop: ");
-  Serial.print(weightDiff);
+  Serial.print(weightDiff, 1);
   Serial.print("g, Target: ");
-  Serial.println(targetWeightDrop);
+  Serial.println(targetWeightDrop, 1);
 
   // Check if target drop is reached
   if (weightDiff >= targetWeightDrop) {
+    servo.close(); // ← CLOSE SERVO WHEN TARGET REACHED
     String message = "Pet feeder: Food consumed! Weight drop detected: " +
                      String(weightDiff, 1) + "g (Target: " + String(targetWeightDrop, 1) + "g)";
     smsModule.sendSMS(message);
     stopWeightDropMonitoring();
-    Serial.println("Target weight drop reached! SMS sent.");
+    Serial.println("Target weight drop reached! Servo closed.");
   }
 
-  // Check timeout (5 minutes)
+  // Check timeout (1 minute)
   if (millis() - weightMonitoringStartTime > WEIGHT_MONITOR_TIMEOUT) {
-    Serial.println("Weight monitoring timeout reached");
+    servo.close(); // ← CLOSE SERVO ON TIMEOUT
+    Serial.println("Weight monitoring timeout reached - servo closed");
     stopWeightDropMonitoring();
   }
 }
@@ -173,7 +183,7 @@ void checkWashTimer() {
   if (!isWashActive) return;
 
   if (millis() - washStartTime >= washDuration) {
-    relayPump.setHigh();  
+    relayPump.setHigh();
     isWashActive = false;
     Serial.println("Wash timer completed - pump turned off");
 
@@ -222,17 +232,14 @@ void handleFeed() {
   // Start weight drop monitoring if target is set
   if (targetWeightDrop > 0) {
     startWeightDropMonitoring();
+    // Servo stays open - weight drop tracking happens in background
+    server.send(200, "text/plain", "Feed started - servo open until weight drop detected");
+  } else {
+    // No weight monitoring - close after short delay
+    delay(5000);
+    servo.close();
+    server.send(200, "text/plain", "Feed completed (no weight monitoring)");
   }
-
-  delay(300); // Shorter delay
-  servo.close();
-
-  // Fixed string concatenation
-  String response = "Feed operation completed";
-  if (targetWeightDrop > 0) {
-    response += " (Weight drop monitoring active)";
-  }
-  server.send(200, "text/plain", response);
 }
 
 void handleWash() {
@@ -695,20 +702,34 @@ void handleScheduledEvents() {
       // Start weight drop monitoring for scheduled feeds too
       if (targetWeightDrop > 0) {
         startWeightDropMonitoring();
+
+        // Wait for weight drop or timeout
+        unsigned long feedStartTime = millis();
+        const unsigned long FEED_TIMEOUT = 300000; // 5 minutes
+
+        while (isMonitoringWeightDrop && (millis() - feedStartTime < FEED_TIMEOUT)) {
+          checkWeightDrop();
+          delay(1000);
+        }
+
+        if (isMonitoringWeightDrop) {
+          stopWeightDropMonitoring();
+          Serial.println("Scheduled feed timeout reached");
+        }
+      } else {
+        delay(5000); // 5 seconds for pet to eat
       }
 
-      delay(300);
       servo.close();
       feedExecutedToday[i] = true;
 
       String smsMessage = "Pet feeder: Feed operation completed at " + nowStr;
       if (targetWeightDrop > 0) {
-        smsMessage += " (Weight drop monitoring active)";
+        smsMessage += " (Weight drop monitoring completed)";
       }
       smsModule.sendSMS(smsMessage);
     }
   }
-
   // Check wash schedules
   for (uint8_t i = 0; i < washCount && i < 10; i++) {
     if (!washExecutedToday[i] && washSchedules[i] == nowStr && !isWashActive) {

@@ -5,6 +5,7 @@ ScaleModule::ScaleModule(uint8_t doutPin, uint8_t sckPin)
 
 void ScaleModule::begin() {
   _scale.begin(_dout, _sck);
+  _scale.set_scale(99.0); // Set calibration factor
 }
 
 void ScaleModule::tare() {
@@ -13,15 +14,15 @@ void ScaleModule::tare() {
   }
 }
 
-long ScaleModule::read() {
+float ScaleModule::read() {
   if (_scale.is_ready()) {
-    return _scale.read();
+    // Get average of 100 samples with stability check
+    return _scale.get_units(5);
   } else {
-    return 0; // Or some error code
+    return 0.0;
   }
 }
 
 bool ScaleModule::isReady() {
   return _scale.is_ready();
 }
-
