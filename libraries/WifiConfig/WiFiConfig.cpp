@@ -6,7 +6,6 @@ WiFiConfig::WiFiConfig(const char* apName, const char* apPassword,
     _eepromStart(eepromStart), _eepromSize(eepromSize), _server(80) {}
 
 void WiFiConfig::begin() {
-  EEPROM.begin(_eepromSize);
   loadCredentials();
   delay(500);
 
