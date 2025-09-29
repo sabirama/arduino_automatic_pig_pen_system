@@ -1,1 +1,6 @@
 sketches
+libraries/SD
+libraries/Firmata
+libraries/Ethernet
+libraries/Servo
+libraries/Keyboard
