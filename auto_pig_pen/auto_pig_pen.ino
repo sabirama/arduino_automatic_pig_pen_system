@@ -160,7 +160,7 @@ void checkWeightDrop() {
 
 // Wash timer functions
 void startWashTimer() {
-  relayPump.setHigh();
+  relayPump.setLow();
   isWashActive = true;
   washStartTime = millis();
   Serial.println("Wash timer started");
@@ -280,7 +280,7 @@ void handleGetWashDuration() {
 
 void handleStopWash() {
   if (isWashActive) {
-    relayPump.setLow();
+    relayPump.setHigh();
     isWashActive = false;
     server.send(200, "text/plain", "Wash operation stopped manually");
   } else {
@@ -623,6 +623,7 @@ void setup() {
 
   servo.begin();
   relayPump.begin();
+  relayPump.setHigh();
   scale.begin();
   smsModule.begin();
 
@@ -665,48 +666,49 @@ void handleScheduledEvents() {
     return;
   }
 
-  if (millis() - lastTimeUpdate > 60000) {
-    String nowStr = getCurrentTimeString();
+  String nowStr = getCurrentTimeString();
+
+  if (nowStr == "00:00") {
+    // Reset daily flags at midnight
+    for (uint8_t i = 0; i < 10; i++) {
+      feedExecutedToday[i] = false;
+      washExecutedToday[i] = false;
+    }
     lastTimeUpdate = millis();
+    return;
+  }
 
-    if (nowStr == "00:00") {
-      // Reset daily flags at midnight
-      for (uint8_t i = 0; i < 10; i++) {
-        feedExecutedToday[i] = false;
-        washExecutedToday[i] = false;
+  // Check feed schedules EVERY TIME (removed the 60-second delay)
+  for (uint8_t i = 0; i < feedCount && i < 10; i++) {
+    if (!feedExecutedToday[i] && feedSchedules[i] == nowStr) {
+      servo.open();
+
+      // Start weight drop monitoring for scheduled feeds too
+      if (targetWeightDrop > 0) {
+        startWeightDropMonitoring();
       }
-      return;
-    }
 
-    for (uint8_t i = 0; i < feedCount && i < 10; i++) {
-      if (!feedExecutedToday[i] && feedSchedules[i] == nowStr) {
-        servo.open();
+      delay(300);
+      servo.close();
+      feedExecutedToday[i] = true;
 
-        // Start weight drop monitoring for scheduled feeds too
-        if (targetWeightDrop > 0) {
-          startWeightDropMonitoring();
-        }
-
-        delay(300); // Shorter delay
-        servo.close();
-        feedExecutedToday[i] = true;
-
-        // Fixed string concatenation
-        String smsMessage = "Pet feeder: Feed operation completed at " + nowStr;
-        if (targetWeightDrop > 0) {
-          smsMessage += " (Weight drop monitoring active)";
-        }
-        smsModule.sendSMS(smsMessage);
+      String smsMessage = "Pet feeder: Feed operation completed at " + nowStr;
+      if (targetWeightDrop > 0) {
+        smsMessage += " (Weight drop monitoring active)";
       }
-    }
-
-    for (uint8_t i = 0; i < washCount && i < 10; i++) {
-      if (!washExecutedToday[i] && washSchedules[i] == nowStr && !isWashActive) {
-        startWashTimer();
-        washExecutedToday[i] = true;
-      }
+      smsModule.sendSMS(smsMessage);
     }
   }
+
+  // Check wash schedules EVERY TIME (removed the 60-second delay)
+  for (uint8_t i = 0; i < washCount && i < 10; i++) {
+    if (!washExecutedToday[i] && washSchedules[i] == nowStr && !isWashActive) {
+      startWashTimer();
+      washExecutedToday[i] = true;
+    }
+  }
+
+  lastTimeUpdate = millis();
 }
 
 void loop() {

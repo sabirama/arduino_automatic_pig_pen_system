@@ -4,7 +4,7 @@ PinControl::PinControl(uint8_t pin) : _pin(pin), _state(false) {}
 
 void PinControl::begin() {
   pinMode(_pin, OUTPUT);
-  setLow();
+  setHigh();
 }
 
 void PinControl::setHigh() {
