@@ -30,7 +30,7 @@
 #define WASH_DURATION_EEPROM_START 224
 #define WASH_DURATION_EEPROM_SIZE 4  // unsigned long size
 
-WiFiConfig wifiConfig("PetFeederAP", "12345678", WIFI_EEPROM_START, WIFI_EEPROM_SIZE);
+WiFiConfig wifiConfig("AutoFeed&WashAP", "12345678", WIFI_EEPROM_START, WIFI_EEPROM_SIZE);
 ESP8266WebServer server(80);
 
 ServoControl servo(SERVO_PIN);
@@ -57,7 +57,7 @@ float targetWeightDrop = 0.0;  // grams
 float initialWeight = 0.0;
 bool isMonitoringWeightDrop = false;
 unsigned long weightMonitoringStartTime = 0;
-const unsigned long WEIGHT_MONITOR_TIMEOUT = 60000; // 1 minutes timeout
+const unsigned long WEIGHT_MONITOR_TIMEOUT = 20000; // 20 seconds timeout
 
 // Wash timer variables
 unsigned long washDuration = 5000;  // Default 5 seconds
@@ -65,7 +65,7 @@ unsigned long washStartTime = 0;
 bool isWashActive = false;
 
 String getCurrentTimeString() {
-  if (wifiConfig.isConnected() && !wifiConfig.isAPModeActive()) {
+  if (wifiConfig.isConnected()) { 
     if (millis() - lastNTPUpdate > 3600000) {
       timeClient.forceUpdate();
       lastNTPUpdate = millis();
@@ -76,6 +76,62 @@ String getCurrentTimeString() {
     return String(buf);
   }
   return "00:00";
+}
+
+// WiFi Config Handlers - ADD THESE
+void handleWiFiConfig() {
+  String html = "<!DOCTYPE html>"
+    "<html>"
+    "<head>"
+    "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+    "<title>WiFi Configuration</title>"
+    "<style>"
+    "body { font-family: Arial, sans-serif; text-align: center; padding: 30px; background: #f2f2f2; }"
+    "form { background: white; display: inline-block; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }"
+    "input[type='text'], input[type='password'] { width: 80%; padding: 10px; margin: 10px; border-radius: 5px; border: 1px solid #ccc; }"
+    "input[type='submit'] { background: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }"
+    "input[type='submit']:hover { background: #45a049; }"
+    ".info { background: #e7f3ff; padding: 10px; border-radius: 5px; margin: 10px 0; }"
+    "</style>"
+    "</head>"
+    "<body>"
+    "<h2>WiFi Setup</h2>"
+    "<form action=\"/wifi/save\" method=\"POST\">"
+    "SSID:<br><input type=\"text\" name=\"ssid\"><br>"
+    "Password:<br><input type=\"password\" name=\"pass\"><br><br>"
+    "<input type=\"submit\" value=\"Save\">"
+    "</form>"
+    "<p><a href=\"/wifi/clear\">Clear saved credentials and restart</a></p>"
+    "<p><a href=\"/\">Back to main control</a></p>"
+    "</body>"
+    "</html>";
+  
+  server.send(200, "text/html", html);
+}
+
+void handleWiFiSave() {
+  if (server.hasArg("ssid") && server.hasArg("pass")) {
+    String ssid = server.arg("ssid");
+    String password = server.arg("pass");
+    
+    wifiConfig.saveCredentials(ssid, password);
+    
+    server.send(200, "text/html", 
+      "<html><body><h1>Credentials Saved!</h1><p>Rebooting and attempting to connect...</p></body></html>");
+    delay(2000);
+    ESP.restart();
+  } else {
+    server.send(400, "text/plain", "Missing SSID or password");
+  }
+}
+
+void handleWiFiClear() {
+  wifiConfig.clearCredentials();
+  
+  server.send(200, "text/html", 
+    "<html><body><h1>Credentials Cleared!</h1><p>Rebooting in AP mode...</p></body></html>");
+  delay(2000);
+  ESP.restart();
 }
 
 // EEPROM functions for weight drop setting
@@ -129,6 +185,7 @@ void startWeightDropMonitoring() {
 
 void stopWeightDropMonitoring() {
   isMonitoringWeightDrop = false;
+  servo.close();
   Serial.println("Weight drop monitoring stopped");
 }
 
@@ -235,10 +292,45 @@ void handleFeed() {
     // Servo stays open - weight drop tracking happens in background
     server.send(200, "text/plain", "Feed started - servo open until weight drop detected");
   } else {
-    // No weight monitoring - close after short delay
-    delay(5000);
+    // No weight monitoring - safety check for scale reading
+    float initialFeedWeight = scale.read();
+    unsigned long feedStartTime = millis();
+    const unsigned long FEED_SAFETY_TIMEOUT = 20000; // 20 seconds safety timeout
+    
+    Serial.println("Feed started with safety timeout (20 seconds)");
+    Serial.print("Initial weight: ");
+    Serial.println(initialFeedWeight, 1);
+    
+    // Monitor for weight drop or timeout
+    while (millis() - feedStartTime < FEED_SAFETY_TIMEOUT) {
+      float currentWeight = scale.read();
+      
+      // Check if scale is reading 0 (no food) or weight is not dropping
+      if (currentWeight <= 0 || currentWeight >= initialFeedWeight) {
+        // No food detected or weight not decreasing - check if we've waited long enough
+        if (millis() - feedStartTime > 5000) { // Wait at least 5 seconds before closing
+          Serial.println("Safety check: No weight drop detected or scale reading 0, closing servo");
+          break;
+        }
+      } else {
+        // Weight is dropping - food is being consumed, let it continue
+        Serial.print("Weight dropping: ");
+        Serial.print(currentWeight, 1);
+        Serial.println("g - food being consumed");
+      }
+      
+      delay(1000); // Check every second
+    }
+    
     servo.close();
-    server.send(200, "text/plain", "Feed completed (no weight monitoring)");
+    
+    // Log the result
+    float finalWeight = scale.read();
+    Serial.print("Feed completed. Final weight: ");
+    Serial.print(finalWeight, 1);
+    Serial.println("g");
+    
+    server.send(200, "text/plain", "Feed completed with safety check");
   }
 }
 
@@ -544,8 +636,24 @@ void handleSendSMS() {
 void handleStatus() {
   String status = "System Status:\n";
   status += "WiFi: " + String(wifiConfig.isConnected() ? "Connected" : "Disconnected") + "\n";
-  status += "IP: " + wifiConfig.getIP().toString() + "\n";
-  status += "AP Mode: " + String(wifiConfig.isAPModeActive() ? "Active" : "Inactive") + "\n";
+  
+  // Show connection info based on mode
+  WiFiMode_t mode = WiFi.getMode();
+  if (mode == WIFI_AP_STA) {
+    status += "=== CONCURRENT MODE ===\n";
+    status += "Station IP: " + WiFi.localIP().toString() + "\n";
+    status += "AP IP: " + WiFi.softAPIP().toString() + "\n";
+    status += "AP SSID: AutoFeed&WashAP\n";
+    status += "Server accessible on BOTH IPs\n";
+  } else if (mode == WIFI_AP) {
+    status += "=== AP MODE ===\n";
+    status += "AP IP: " + WiFi.softAPIP().toString() + "\n";
+    status += "AP SSID: AutoFeed&WashAP\n";
+  } else {
+    status += "=== STATION MODE ===\n";
+    status += "Station IP: " + WiFi.localIP().toString() + "\n";
+  }
+  
   status += "Scale reading: " + String(scale.read(), 1) + "g\n";
   status += "Current Time: " + getCurrentTimeString() + "\n";
 
@@ -599,6 +707,11 @@ void setupServer() {
   server.on("/style.css", handleCSS);
   server.on("/script.js", handleJS);
 
+  // ADD WIFI CONFIG ENDPOINTS
+  server.on("/wifi", handleWiFiConfig);
+  server.on("/wifi/save", HTTP_POST, handleWiFiSave);
+  server.on("/wifi/clear", handleWiFiClear);
+
   server.on("/feed", HTTP_POST, handleFeed);
   server.on("/wash", HTTP_POST, handleWash);
   server.on("/stopWash", HTTP_POST, handleStopWash);
@@ -634,6 +747,9 @@ void setup() {
   scale.begin();
   smsModule.begin();
 
+  // Enable concurrent mode BEFORE calling wifiConfig.begin()
+  wifiConfig.enableConcurrentMode(true);  // ← ENABLE CONCURRENT MODE
+  
   wifiConfig.begin();
 
   // Load settings from EEPROM
@@ -652,6 +768,26 @@ void setup() {
   }
 
   Serial.println("Pet Feeder Started!");
+  
+  // Display connection info
+  WiFiMode_t mode = WiFi.getMode();
+  if (mode == WIFI_AP_STA) {
+    Serial.println("=== CONCURRENT MODE ACTIVE ===");
+    Serial.print("Station IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP());
+    Serial.println("Web server accessible on BOTH IP addresses");
+  } else if (mode == WIFI_AP) {
+    Serial.println("=== AP MODE ACTIVE ===");
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP());
+  } else {
+    Serial.println("=== STATION MODE ACTIVE ===");
+    Serial.print("Station IP: ");
+    Serial.println(WiFi.localIP());
+  }
+  
   Serial.print("Weight drop target: ");
   Serial.print(targetWeightDrop);
   Serial.println("g");
@@ -669,7 +805,7 @@ void setup() {
 }
 
 void handleScheduledEvents() {
-  if (!wifiConfig.isConnected() || wifiConfig.isAPModeActive()) {
+  if (!wifiConfig.isConnected()) {
     return;
   }
 
@@ -744,7 +880,7 @@ void loop() {
   server.handleClient();
   wifiConfig.handleClient();
 
-  if (wifiConfig.isConnected() && !wifiConfig.isAPModeActive()) {
+  if (wifiConfig.isConnected()) {
     handleScheduledEvents();
 
     // Check weight drop periodically

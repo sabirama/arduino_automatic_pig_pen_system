@@ -2,7 +2,6 @@
 #define WIFICONFIG_H
 
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
 #include <EEPROM.h>
 
 #define WIFI_EEPROM_SIZE 96
@@ -17,20 +16,21 @@ public:
   IPAddress getIP();
   void clearCredentials();
   bool isAPModeActive();
+  void enableConcurrentMode(bool enable = true);
+  bool isConcurrentMode();
+  void saveCredentials(const String& newSsid, const String& newPassword);
 
 private:
   const char* _apName;
   const char* _apPassword;
   int _eepromStart;
   int _eepromSize;
-  ESP8266WebServer _server;
   String _ssid;
   String _password;
-  bool _apModeActive = false;
+  bool _concurrentMode = false;
 
   void loadCredentials();
-  void saveCredentials(const String& newSsid, const String& newPassword);
-  void startConfigPortal();
+  void startAPMode();
   void tryConnectToWiFi();
 };
 

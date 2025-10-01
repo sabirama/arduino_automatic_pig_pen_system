@@ -3,7 +3,7 @@
 WiFiConfig::WiFiConfig(const char* apName, const char* apPassword, 
                        int eepromStart, int eepromSize)
   : _apName(apName), _apPassword(apPassword), 
-    _eepromStart(eepromStart), _eepromSize(eepromSize), _server(80) {}
+    _eepromStart(eepromStart), _eepromSize(eepromSize) {}
 
 void WiFiConfig::begin() {
   loadCredentials();
@@ -13,14 +13,12 @@ void WiFiConfig::begin() {
     tryConnectToWiFi();
   } else {
     Serial.println("No saved WiFi credentials. Starting AP mode...");
-    startConfigPortal();
+    startAPMode();
   }
 }
 
 void WiFiConfig::handleClient() {
-  if (_apModeActive) {
-    _server.handleClient();
-  }
+  // Web server handling moved to main sketch
 }
 
 bool WiFiConfig::isConnected() {
@@ -28,7 +26,7 @@ bool WiFiConfig::isConnected() {
 }
 
 IPAddress WiFiConfig::getIP() {
-  if (_apModeActive) {
+  if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
     return WiFi.softAPIP();
   }
   return WiFi.localIP();
@@ -39,7 +37,15 @@ void WiFiConfig::clearCredentials() {
     EEPROM.write(_eepromStart + i, 0);
   }
   EEPROM.commit();
-  ESP.restart();
+}
+
+void WiFiConfig::enableConcurrentMode(bool enable) {
+  _concurrentMode = enable;
+  Serial.println("Concurrent mode: " + String(enable ? "ENABLED" : "DISABLED"));
+}
+
+bool WiFiConfig::isConcurrentMode() {
+  return _concurrentMode;
 }
 
 void WiFiConfig::loadCredentials() {
@@ -65,112 +71,136 @@ void WiFiConfig::saveCredentials(const String& newSsid, const String& newPasswor
   EEPROM.commit();
 }
 
-void WiFiConfig::startConfigPortal() {
-  _apModeActive = true;
-  WiFi.mode(WIFI_AP);
+void WiFiConfig::startAPMode() {
+  if (_concurrentMode && WiFi.status() == WL_CONNECTED) {
+    WiFi.mode(WIFI_AP_STA);
+    Serial.println("Concurrent mode: AP + Station active");
+  } else {
+    WiFi.mode(WIFI_AP);
+    Serial.println("AP mode only");
+  }
+  
   WiFi.softAP(_apName, _apPassword);
-
-  _server.on("/", [this]() {
-    _server.send(200, "text/html",
-      "<!DOCTYPE html>"
-      "<html>"
-      "<head>"
-      "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-      "<style>"
-      "body { font-family: Arial, sans-serif; text-align: center; padding: 30px; background: #f2f2f2; }"
-      "form { background: white; display: inline-block; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }"
-      "input[type='text'], input[type='password'] { width: 80%; padding: 10px; margin: 10px; border-radius: 5px; border: 1px solid #ccc; }"
-      "input[type='submit'] { background: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }"
-      "input[type='submit']:hover { background: #45a049; }"
-      "</style>"
-      "</head>"
-      "<body>"
-      "<h2>WiFi Setup</h2>"
-      "<form action=\"/save\" method=\"POST\">"
-      "SSID:<br><input type=\"text\" name=\"ssid\"><br>"
-      "Password:<br><input type=\"password\" name=\"pass\"><br><br>"
-      "<input type=\"submit\" value=\"Save\">"
-      "</form>"
-      "<p><a href=\"/clear\">Clear saved credentials</a></p>"
-      "</body>"
-      "</html>"
-    );
-  });
-
-  _server.on("/save", [this]() {
-    _ssid = _server.arg("ssid");
-    _password = _server.arg("pass");
-    saveCredentials(_ssid, _password);
-    _server.send(200, "text/html", 
-      "<html><body><h1>Credentials Saved!</h1><p>Rebooting and attempting to connect...</p></body></html>");
-    delay(2000);
-    ESP.restart();
-  });
-
-  _server.on("/clear", [this]() {
-    clearCredentials();
-  });
-
-  _server.begin();
+  
   Serial.println("=======================================");
-  Serial.println("AP Mode started!");
+  Serial.println("AP Mode Started!");
   Serial.print("Connect to: ");
   Serial.println(_apName);
-  Serial.print("IP Address: ");
+  Serial.print("AP IP Address: ");
   Serial.println(WiFi.softAPIP());
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Station IP Address: ");
+    Serial.println(WiFi.localIP());
+  }
+  
   Serial.println("Open http://" + WiFi.softAPIP().toString() + " in your browser");
   Serial.println("=======================================");
 }
 
+IPAddress generateStaticIP(const IPAddress& gateway) {
+  // Generate a static IP in the same subnet as the gateway
+  // Use the gateway's first three octets and set the last octet to 200
+  // Example: gateway 192.168.1.1 -> static IP 192.168.1.200
+  return IPAddress(gateway[0], gateway[1], gateway[2], 200);
+}
+
+bool isIPInSameSubnet(const IPAddress& ip1, const IPAddress& ip2, const IPAddress& subnet) {
+  for (int i = 0; i < 4; i++) {
+    if ((ip1[i] & subnet[i]) != (ip2[i] & subnet[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void WiFiConfig::tryConnectToWiFi() {
-  Serial.println("Attempting to connect to WiFi with static IP...");
+  Serial.println("Attempting to connect to WiFi...");
   Serial.print("SSID: ");
   Serial.println(_ssid);
   
-  // First try with DHCP to get gateway info
-  WiFi.mode(WIFI_STA);
+  // Set mode based on concurrent mode setting
+  if (_concurrentMode) {
+    WiFi.mode(WIFI_AP_STA);
+    // Start AP immediately for concurrent mode
+    WiFi.softAP(_apName, _apPassword);
+    Serial.println("Concurrent mode: Starting AP alongside Station");
+  } else {
+    WiFi.mode(WIFI_STA);
+  }
+  
+  // First, try connecting with DHCP to discover network settings
   WiFi.begin(_ssid.c_str(), _password.c_str());
 
-  Serial.print("Getting network info via DHCP");
+  Serial.print("Connecting via DHCP");
   int dhcpTimeout = 0;
-  while (WiFi.status() != WL_CONNECTED && dhcpTimeout < 20) {
+  while (WiFi.status() != WL_CONNECTED && dhcpTimeout < 25) {
     delay(500);
     Serial.print(".");
     dhcpTimeout++;
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\n❌ Failed to get network info via DHCP");
-    Serial.println("Starting Configuration Portal...");
-    startConfigPortal();
+    Serial.println("\n❌ Failed to connect via DHCP");
+    Serial.println("Starting AP Mode...");
+    startAPMode();
     return;
   }
 
-  // Successfully connected via DHCP, now get gateway and set static IP
+  // Successfully connected via DHCP - get network info
   IPAddress gateway = WiFi.gatewayIP();
-  Serial.print("\nGateway IP: ");
+  IPAddress subnet = WiFi.subnetMask();
+  IPAddress localIP = WiFi.localIP();
+  
+  Serial.println("\n✅ Connected via DHCP!");
+  Serial.print("Local IP: ");
+  Serial.println(localIP);
+  Serial.print("Gateway: ");
   Serial.println(gateway);
+  Serial.print("Subnet: ");
+  Serial.println(subnet);
 
-  // Use static IP 192.168.0.200 (you can change this if needed)
-  IPAddress staticIP(192, 168, 0, 200);
-  IPAddress subnet(255, 255, 255, 0);
-  IPAddress dns = gateway; // Use gateway as DNS
+  // Generate appropriate static IP based on gateway
+  IPAddress staticIP = generateStaticIP(gateway);
+  
+  // Check if the generated static IP is in the same subnet
+  if (!isIPInSameSubnet(staticIP, gateway, subnet)) {
+    Serial.println("⚠️  Generated static IP not in same subnet as gateway");
+    Serial.println("Using DHCP instead of static IP");
+    
+    if (_concurrentMode) {
+      Serial.print("AP IP Address: ");
+      Serial.println(WiFi.softAPIP());
+      Serial.println("Server accessible on BOTH IP addresses");
+    }
+    
+    return; // Stay with DHCP
+  }
 
-  Serial.print("Setting static IP to: ");
+  // Check if static IP might conflict with existing devices
+  Serial.print("Generated static IP: ");
   Serial.println(staticIP);
 
   // Disconnect and reconnect with static IP
   WiFi.disconnect();
-  delay(1000);
+  delay(1500);
 
+  // Reconfigure mode for static IP connection
+  if (_concurrentMode) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(_apName, _apPassword);
+  } else {
+    WiFi.mode(WIFI_STA);
+  }
+  
   // Configure static IP
-  WiFi.config(staticIP, dns, gateway, subnet);
+  WiFi.config(staticIP, gateway, gateway, subnet);
   
   Serial.println("Reconnecting with static IP...");
   WiFi.begin(_ssid.c_str(), _password.c_str());
 
   int staticTimeout = 0;
-  while (WiFi.status() != WL_CONNECTED && staticTimeout < 20) {
+  while (WiFi.status() != WL_CONNECTED && staticTimeout < 25) {
     delay(500);
     Serial.print(".");
     staticTimeout++;
@@ -178,20 +208,54 @@ void WiFiConfig::tryConnectToWiFi() {
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\n✅ Connected with static IP!");
-    Serial.print("IP Address: ");
+    Serial.print("Station IP Address: ");
     Serial.println(WiFi.localIP());
     Serial.print("Gateway: ");
     Serial.println(WiFi.gatewayIP());
     Serial.print("Subnet: ");
     Serial.println(WiFi.subnetMask());
-    _apModeActive = false;
+    
+    if (_concurrentMode) {
+      Serial.print("AP IP Address: ");
+      Serial.println(WiFi.softAPIP());
+      Serial.println("Web server accessible on BOTH IP addresses");
+    }
   } else {
     Serial.println("\n❌ Failed to connect with static IP");
-    Serial.println("Starting Configuration Portal...");
-    startConfigPortal();
+    Serial.println("Falling back to DHCP...");
+    
+    // Fallback to DHCP
+    WiFi.disconnect();
+    delay(1000);
+    
+    if (_concurrentMode) {
+      WiFi.mode(WIFI_AP_STA);
+      WiFi.softAP(_apName, _apPassword);
+    } else {
+      WiFi.mode(WIFI_STA);
+    }
+    
+    WiFi.begin(_ssid.c_str(), _password.c_str());
+    
+    int fallbackTimeout = 0;
+    while (WiFi.status() != WL_CONNECTED && fallbackTimeout < 20) {
+      delay(500);
+      Serial.print(".");
+      fallbackTimeout++;
+    }
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\n✅ Connected via DHCP (fallback)");
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println("\n❌ Failed to connect via DHCP fallback");
+      Serial.println("Starting AP Mode...");
+      startAPMode();
+    }
   }
 }
 
 bool WiFiConfig::isAPModeActive() {
-  return _apModeActive;
+  return WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA;
 }
