@@ -122,139 +122,44 @@ void WiFiConfig::tryConnectToWiFi() {
   // Set mode based on concurrent mode setting
   if (_concurrentMode) {
     WiFi.mode(WIFI_AP_STA);
-    // Start AP immediately for concurrent mode
     WiFi.softAP(_apName, _apPassword);
     Serial.println("Concurrent mode: Starting AP alongside Station");
   } else {
     WiFi.mode(WIFI_STA);
   }
   
-  // First, try connecting with DHCP to discover network settings
+  // Just connect with DHCP
   WiFi.begin(_ssid.c_str(), _password.c_str());
 
   Serial.print("Connecting via DHCP");
-  int dhcpTimeout = 0;
-  while (WiFi.status() != WL_CONNECTED && dhcpTimeout < 25) {
+  int timeout = 0;
+  while (WiFi.status() != WL_CONNECTED && timeout < 30) {
     delay(500);
     Serial.print(".");
-    dhcpTimeout++;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("\n❌ Failed to connect via DHCP");
-    Serial.println("Starting AP Mode...");
-    startAPMode();
-    return;
-  }
-
-  // Successfully connected via DHCP - get network info
-  IPAddress gateway = WiFi.gatewayIP();
-  IPAddress subnet = WiFi.subnetMask();
-  IPAddress localIP = WiFi.localIP();
-  
-  Serial.println("\n✅ Connected via DHCP!");
-  Serial.print("Local IP: ");
-  Serial.println(localIP);
-  Serial.print("Gateway: ");
-  Serial.println(gateway);
-  Serial.print("Subnet: ");
-  Serial.println(subnet);
-
-  // Generate appropriate static IP based on gateway
-  IPAddress staticIP = generateStaticIP(gateway);
-  
-  // Check if the generated static IP is in the same subnet
-  if (!isIPInSameSubnet(staticIP, gateway, subnet)) {
-    Serial.println("⚠️  Generated static IP not in same subnet as gateway");
-    Serial.println("Using DHCP instead of static IP");
-    
-    if (_concurrentMode) {
-      Serial.print("AP IP Address: ");
-      Serial.println(WiFi.softAPIP());
-      Serial.println("Server accessible on BOTH IP addresses");
-    }
-    
-    return; // Stay with DHCP
-  }
-
-  // Check if static IP might conflict with existing devices
-  Serial.print("Generated static IP: ");
-  Serial.println(staticIP);
-
-  // Disconnect and reconnect with static IP
-  WiFi.disconnect();
-  delay(1500);
-
-  // Reconfigure mode for static IP connection
-  if (_concurrentMode) {
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAP(_apName, _apPassword);
-  } else {
-    WiFi.mode(WIFI_STA);
-  }
-  
-  // Configure static IP
-  WiFi.config(staticIP, gateway, gateway, subnet);
-  
-  Serial.println("Reconnecting with static IP...");
-  WiFi.begin(_ssid.c_str(), _password.c_str());
-
-  int staticTimeout = 0;
-  while (WiFi.status() != WL_CONNECTED && staticTimeout < 25) {
-    delay(500);
-    Serial.print(".");
-    staticTimeout++;
+    timeout++;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n✅ Connected with static IP!");
+    Serial.println("\n✅ Connected via DHCP!");
     Serial.print("Station IP Address: ");
     Serial.println(WiFi.localIP());
     Serial.print("Gateway: ");
     Serial.println(WiFi.gatewayIP());
     Serial.print("Subnet: ");
     Serial.println(WiFi.subnetMask());
-    
+
     if (_concurrentMode) {
       Serial.print("AP IP Address: ");
       Serial.println(WiFi.softAPIP());
       Serial.println("Web server accessible on BOTH IP addresses");
     }
   } else {
-    Serial.println("\n❌ Failed to connect with static IP");
-    Serial.println("Falling back to DHCP...");
-    
-    // Fallback to DHCP
-    WiFi.disconnect();
-    delay(1000);
-    
-    if (_concurrentMode) {
-      WiFi.mode(WIFI_AP_STA);
-      WiFi.softAP(_apName, _apPassword);
-    } else {
-      WiFi.mode(WIFI_STA);
-    }
-    
-    WiFi.begin(_ssid.c_str(), _password.c_str());
-    
-    int fallbackTimeout = 0;
-    while (WiFi.status() != WL_CONNECTED && fallbackTimeout < 20) {
-      delay(500);
-      Serial.print(".");
-      fallbackTimeout++;
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\n✅ Connected via DHCP (fallback)");
-      Serial.print("IP Address: ");
-      Serial.println(WiFi.localIP());
-    } else {
-      Serial.println("\n❌ Failed to connect via DHCP fallback");
-      Serial.println("Starting AP Mode...");
-      startAPMode();
-    }
+    Serial.println("\n❌ Failed to connect to WiFi");
+    Serial.println("Starting AP Mode...");
+    startAPMode();
   }
 }
+
 
 bool WiFiConfig::isAPModeActive() {
   return WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA;

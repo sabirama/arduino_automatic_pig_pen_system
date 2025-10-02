@@ -2,9 +2,11 @@ Auto Feeder & Washer Manual
 
 A. Setting up initial Wifi Connection.
 	1. Open wifi then connect to device softAP "AutoFeed&WashAP" with password of "12345678".
-	2 Go to 192.168.4.1 to set-up wifi credentials.
+	2 Open your browser and open 192.168.4.1 to set-up wifi credentials.
 	3. Input wifi credentials that you will be connecting and the device will reboot.
-	4. Connect to the softAP or wifi you used and open 192.168.0.200 or 192.168.1.200 depending on your network gateway.
+	4. Connect back to softAP to see your Station IP.
+	5. Open your browser and open the Station IP, e.g. 192.168.0.101. 
+	6. If Station IP says disconnected or empty, try to restart device or re-enter credentials.
 
 B. Web Page.
 	Wifi Settings - setup wifi credentials.
